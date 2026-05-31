@@ -7,6 +7,7 @@ from discord import app_commands
 
 TOKEN = os.getenv("TOKEN")
 
+TARGET_CHANNEL = 1510294219384946919
 SECOND_TARGET_CHANNEL = 1510556918853402716
 
 class DeobfBot(commands.Bot):
@@ -16,7 +17,15 @@ class DeobfBot(commands.Bot):
         super().__init__(command_prefix=".", intents=intents)
 
     async def setup_hook(self):
+        self.tree.clear_commands(guild=None)
         await self.tree.sync()
+
+async def run_deobf(content: bytes):
+    text = content.decode("utf-8", errors="ignore")
+    matches = re.findall(r"\\(\d+)", text)
+    if not matches:
+        return None
+    return "".join(chr(int(num)) for num in matches)
 
 async def run_websim(content: bytes):
     text = content.decode("utf-8", errors="ignore")
@@ -36,10 +45,45 @@ client = DeobfBot()
 async def on_message(message):
     if message.author.bot:
         return
+    if message.channel.id == TARGET_CHANNEL and message.content.lower().startswith(".seel"):
+        await client.process_commands(message)
+        return
     if message.channel.id == SECOND_TARGET_CHANNEL and message.content.lower().startswith(".websim"):
         await client.process_commands(message)
         return
     await client.process_commands(message)
+
+@client.command(name="seel")
+async def seel_prefix(ctx: commands.Context):
+    try:
+        if not ctx.message.attachments:
+            await ctx.send("Attach only a .lua or .txt file.")
+            return
+        content = await ctx.message.attachments[0].read()
+        result = await run_deobf(content)
+        if result is None:
+            await ctx.send("💀 Its not LuaSeel bro")
+            return
+        output = io.BytesIO(result.encode("utf-8"))
+        await ctx.send(content="😂 Here is your deobfuscated script skid",
+                       file=discord.File(output, filename="deobfuscated.lua"))
+    except Exception:
+        await ctx.send("😭 Deobfuscation failed.")
+
+@client.tree.command(name="luaseel-deobf", description="Deobfuscate LuaSeel scripts")
+@app_commands.describe(file="Upload your .lua or .txt file only!")
+async def luaseel_deobf(interaction: discord.Interaction, file: discord.Attachment):
+    try:
+        content = await file.read()
+        result = await run_deobf(content)
+        if result is None:
+            await interaction.response.send_message("💀 Its not LuaSeel bro")
+            return
+        output = io.BytesIO(result.encode("utf-8"))
+        await interaction.response.send_message(content="😂 Here is your deobfuscated script skid",
+                                                file=discord.File(output, filename="deobfuscated.lua"))
+    except Exception:
+        await interaction.response.send_message("😭 Deobfuscation failed.")
 
 @client.command(name="websim")
 async def websim_prefix(ctx: commands.Context):
