@@ -14,6 +14,8 @@ else:
 TARGET_CHANNEL = 1510294219384946919
 SECOND_TARGET_CHANNEL = 1510556918853402716
 
+HEADER_TEXT = "-- This file was generated in Lua Land Hub | .gg/Zame2JAGDr\n\n"
+
 class DeobfBot(commands.Bot):
     def __init__(self):
         intents = discord.Intents.default()
@@ -28,7 +30,7 @@ async def run_deobf(content: bytes):
     matches = re.findall(r"\\(\d+)", text)
     if not matches:
         return None
-    return "".join(chr(int(num)) for num in matches)
+    return HEADER_TEXT + "".join(chr(int(num)) for num in matches)
 
 async def run_websim(content: bytes):
     text = content.decode("utf-8", errors="ignore")
@@ -76,7 +78,7 @@ async def run_websim(content: bytes):
             for ds in decoded_strings:
                 if ds.strip():
                     non_websim_lines.append(ds)
-            return "\n".join(non_websim_lines)
+            return HEADER_TEXT + "\n".join(non_websim_lines)
         except Exception:
             pass
 
@@ -86,7 +88,7 @@ async def run_websim(content: bytes):
             payload = hex_match.group(1)
             bytes_data = [int(payload[i:i+2],16) for i in range(0,len(payload),2)]
             decoded = ''.join(chr(b ^ ((0xee + (i*7)) % 256)) for i,b in enumerate(bytes_data))
-            return decoded
+            return HEADER_TEXT + decoded
 
     return None
 
