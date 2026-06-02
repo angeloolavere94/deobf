@@ -21,7 +21,6 @@ class DeobfBot(commands.Bot):
         super().__init__(command_prefix=".", intents=intents)
 
     async def setup_hook(self):
-        self.tree.clear_commands(guild=None)
         await self.tree.sync()
 
 async def run_deobf(content: bytes):
