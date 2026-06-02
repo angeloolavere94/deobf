@@ -40,27 +40,25 @@ async def run_websim(content: bytes):
     has_players = 'game:GetService("Players")' in cleaned_stripped or "game:GetService('Players')" in cleaned_stripped
     has_startergui = 'game:GetService("StarterGui")' in cleaned_stripped or "game:GetService('StarterGui')" in cleaned_stripped
     
-    if not (has_players or has_startergui):
+    if not (has_players and has_startergui):
         return None
 
-    array_match = re.search(r'(?:local\s+\w+\s*=\s*\{|a\s*=\s*\{)(.*?)\}', cleaned_stripped)
-    math_match = re.search(r'string\.char\(\s*\(\s*\w+\[\s*\w+\s*\]\s*([-+*/0-9]+)\s*\)\s*([-+*/0-9]+)\s*\)', cleaned_stripped, re.IGNORECASE)
+    array_matches = re.findall(r'(?:local\s+\w+\s*=\s*\{|\b[a-zA-Z_]\w*\s*=\s*\{)(.*?)\}', cleaned_stripped)
+    math_matches = re.findall(r'string\.char\(\s*\(\s*\w+\[\s*\w+\s*\]\s*([-+*/0-9]+)\s*\)\s*([-+*/0-9]+)\s*\)', cleaned_stripped, re.IGNORECASE)
 
-    if array_match and math_match:
+    if array_matches and math_matches:
         try:
-            numbers_str = array_match.group(1)
-            numbers = [int(n.strip()) for n in numbers_str.split(",") if n.strip().isdigit()]
-            
-            op1, op2 = math_match.group(1), math_match.group(2)
-            offset = int(re.sub(r'[-+*/]', '', op1).strip())
-            divisor = int(re.sub(r'[-+*/]', '', op2).strip())
-            
-            decoded_chars = []
-            for num in numbers:
-                char_code = int((num - offset) / divisor)
-                decoded_chars.append(chr(char_code))
+            decoded_strings = []
+            for array_str, (op1, op2) in zip(array_matches, math_matches):
+                numbers = [int(n.strip()) for n in array_str.split(",") if n.strip().isdigit()]
+                offset = int(re.sub(r'[-+*/]', '', op1).strip())
+                divisor = int(re.sub(r'[-+*/]', '', op2).strip())
                 
-            decoded_string = "".join(decoded_chars)
+                decoded_chars = []
+                for num in numbers:
+                    char_code = int((num - offset) / divisor)
+                    decoded_chars.append(chr(char_code))
+                decoded_strings.append("".join(decoded_chars))
             
             lines = text.splitlines()
             non_websim_lines = []
@@ -72,10 +70,12 @@ async def run_websim(content: bytes):
                     non_websim_lines.append(line)
                 elif 'game:GetService("StarterGui")' in line or "game:GetService('StarterGui')" in line:
                     non_websim_lines.append(line)
-                elif not any(x in line_str.lower() for x in ['local _o', 'print(', 'function()', 'local a=', 'local b=', 'for i=', 'b=b..', 'end', '_oag']):
+                elif not any(x in line_str.lower() for x in ['local _', 'print(', 'function()', 'local a=', 'local b=', 'for i=', 'b=b..', 'end', 'loadstring', 'game:httpget']):
                     non_websim_lines.append(line)
 
-            non_websim_lines.append(decoded_string)
+            for ds in decoded_strings:
+                if ds.strip():
+                    non_websim_lines.append(ds)
             return "\n".join(non_websim_lines)
         except Exception:
             pass
