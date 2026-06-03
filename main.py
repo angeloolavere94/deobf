@@ -2,6 +2,7 @@ import discord
 import os
 import re
 import io
+import aiohttp
 from discord.ext import commands
 from discord import app_commands
 
@@ -86,8 +87,8 @@ async def run_websim(content: bytes):
         hex_match = re.search(r'q1="([0-9a-f]+)"', text)
         if hex_match:
             payload = hex_match.group(1)
-            bytes_data = [int(payload[i:i+2],16) for i in range(0,len(payload),2)]
-            decoded = ''.join(chr(b ^ ((0xee + (i*7)) % 256)) for i,b in enumerate(bytes_data))
+            bytes_data = [int(payload[i:i+2], 16) for i in range(0, len(payload), 2)]
+            decoded = ''.join(chr(b ^ ((0xee + (i * 7)) % 256)) for i, b in enumerate(bytes_data))
             return HEADER_TEXT + decoded
 
     return None
@@ -169,6 +170,69 @@ async def websim_deobf(interaction: discord.Interaction, file: discord.Attachmen
                                                 file=discord.File(output, filename="deobfuscated.lua"))
     except Exception:
         await interaction.response.send_message("😭 WebSim deobfuscation failed.")
+
+@client.tree.command(name="lua-obfuscator-deobfuscate", description="Deobfuscate an script that uses LuaObfuscator (FERIB).")
+@app_commands.describe(file="Attach a .lua and .txt file only.")
+async def lua_obfuscator_deobfuscate(interaction: discord.Interaction, file: discord.Attachment):
+    if not (file.filename.endswith(".lua") or file.filename.endswith(".txt")):
+        await interaction.response.send_message("❌ Invalid file format! Please upload only `.lua` or `.txt` files.", ephemeral=True)
+        return
+
+    await interaction.response.defer()
+
+    try:
+        content = await file.read()
+        script_text = content.decode("utf-8", errors="ignore")
+        
+        base_url = "https://luaobfuscator.com"
+        headers = {
+            "Content-Type": "application/json",
+            "Accept": "application/json"
+        }
+        
+        all_modes = [
+            "beautify", "minimal", "step", "strings", "constants", 
+            "remove_dead_code", "inline_variables", "control_flow", 
+            "un-minify", "reformat", "devirtualize", "decompile", 
+            "decrypt_strings", "clean_structures"
+        ]
+        
+        files_to_send = []
+
+        async with aiohttp.ClientSession() as session:
+            for mode in all_modes:
+                payload = {
+                    "script": script_text,
+                    "options": {
+                        "mode": mode
+                    }
+                }
+                
+                try:
+                    async with session.post(base_url, json=payload, headers=headers, timeout=12) as response:
+                        if response.status == 200:
+                            data = await response.json()
+                            deobfuscated_code = data.get("code") or data.get("result") or data.get("script")
+                            
+                            if deobfuscated_code and deobfuscated_code.strip() and deobfuscated_code.strip() != script_text.strip():
+                                formatted_code = HEADER_TEXT + deobfuscated_code
+                                output_file = io.BytesIO(formatted_code.encode("utf-8"))
+                                files_to_send.append(discord.File(output_file, filename=f"deobf_{mode}.lua"))
+                except Exception:
+                    continue
+
+        if not files_to_send:
+            await interaction.followup.send("💀 This script doesn't seem to be a Ferib LuaObfuscator script or it cannot be parsed by any mode.")
+            return
+
+        await interaction.followup.send(content="🎉 Deobfuscation complete! Here is the actual code extracted from every matching mode:")
+        for i in range(0, len(files_to_send), 10):
+            chunk = files_to_send[i:i+10]
+            await interaction.channel.send(files=chunk)
+            
+    except Exception as e:
+        print(f"Error during LuaObfuscator request: {e}")
+        await interaction.followup.send("😭 An unexpected framework error happened during the API extraction.")
 
 def handler(request):
     return {"status": "ok", "message": "Discord bot running"}
