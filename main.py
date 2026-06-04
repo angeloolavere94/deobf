@@ -3,6 +3,8 @@ import os
 import re
 import io
 import aiohttp
+import subprocess
+import tempfile
 from discord.ext import commands
 from discord import app_commands
 
@@ -92,6 +94,63 @@ async def run_websim(content: bytes):
             return HEADER_TEXT + decoded
 
     return None
+
+async def run_luaobfuscator_deobf(script_text: str):
+    IDENTIFIER = r"[\w_]+"
+    
+    pattern = r"(.+)(local function " + IDENTIFIER + r"\(\.\.\. \).+local function )(" + IDENTIFIER + r")(\(\).+)(local function " + IDENTIFIER + r"\(" + IDENTIFIER + r", ?" + IDENTIFIER + r", ?" + IDENTIFIER + r"\).+)"
+    
+    match = re.search(pattern, script_text, re.DOTALL)
+    
+    if not match:
+        return None
+    
+    a, b, deserialize_func, d, e = match.groups()
+    
+    injection = f"""if true then
+        local instructions = {deserialize_func}()[1]
+        local result = {{}}
+        for _, inst in next, instructions do
+            if #inst == 3 then
+                table.insert(result, tostring(inst[3]))
+            end
+        end
+        print(table.concat(result, "\\n"))
+        return
+    end;"""
+    
+    attack_payload = a + b + deserialize_func + d + injection + e
+    
+    try:
+        with tempfile.NamedTemporaryFile(mode='w+', suffix='.lua', delete=False, encoding='utf-8') as temp_lua_file:
+            temp_lua_file.write(attack_payload)
+            temp_lua_file.flush()
+            temp_file_path = temp_lua_file.name
+
+        result = subprocess.run(
+            ["lua", temp_file_path],
+            capture_output=True,
+            text=True,
+            timeout=5
+        )
+        
+        try:
+            os.remove(temp_file_path)
+        except Exception:
+            pass
+            
+        if result.returncode != 0:
+            return None
+            
+        dumped_constants = result.stdout
+        if not dumped_constants.strip():
+            return None
+            
+        return HEADER_TEXT + dumped_constants
+
+    except (subprocess.TimeoutExpired, Exception) as err:
+        print(f"Execution error: {err}")
+        return None
 
 client = DeobfBot()
 
@@ -184,55 +243,19 @@ async def lua_obfuscator_deobfuscate(interaction: discord.Interaction, file: dis
         content = await file.read()
         script_text = content.decode("utf-8", errors="ignore")
         
-        base_url = "https://luaobfuscator.com"
-        headers = {
-            "Content-Type": "application/json",
-            "Accept": "application/json"
-        }
+        result = await run_luaobfuscator_deobf(script_text)
         
-        all_modes = [
-            "beautify", "minimal", "step", "strings", "constants", 
-            "remove_dead_code", "inline_variables", "control_flow", 
-            "un-minify", "reformat", "devirtualize", "decompile", 
-            "decrypt_strings", "clean_structures"
-        ]
-        
-        files_to_send = []
-
-        async with aiohttp.ClientSession() as session:
-            for mode in all_modes:
-                payload = {
-                    "script": script_text,
-                    "options": {
-                        "mode": mode
-                    }
-                }
-                
-                try:
-                    async with session.post(base_url, json=payload, headers=headers, timeout=12) as response:
-                        if response.status == 200:
-                            data = await response.json()
-                            deobfuscated_code = data.get("code") or data.get("result") or data.get("script")
-                            
-                            if deobfuscated_code and deobfuscated_code.strip() and deobfuscated_code.strip() != script_text.strip():
-                                formatted_code = HEADER_TEXT + deobfuscated_code
-                                output_file = io.BytesIO(formatted_code.encode("utf-8"))
-                                files_to_send.append(discord.File(output_file, filename=f"deobf_{mode}.lua"))
-                except Exception:
-                    continue
-
-        if not files_to_send:
-            await interaction.followup.send("💀 This script doesn't seem to be a Ferib LuaObfuscator script or it cannot be parsed by any mode.")
+        if result is None:
+            await interaction.followup.send("💀 This script doesn't seem to be a LuaObfuscator (FERIB) script or it cannot be deobfuscated.")
             return
 
-        await interaction.followup.send(content="🎉 Deobfuscation complete! Here is the actual code extracted from every matching mode:")
-        for i in range(0, len(files_to_send), 10):
-            chunk = files_to_send[i:i+10]
-            await interaction.channel.send(files=chunk)
+        output_file = io.BytesIO(result.encode("utf-8"))
+        await interaction.followup.send(content="🎉 Deobfuscation complete! Here is your deobfuscated script:")
+        await interaction.followup.send(file=discord.File(output_file, filename="deobfuscated.lua"))
             
     except Exception as e:
-        print(f"Error during LuaObfuscator request: {e}")
-        await interaction.followup.send("😭 An unexpected framework error happened during the API extraction.")
+        print(f"Error during LuaObfuscator deobfuscation: {e}")
+        await interaction.followup.send("😭 An unexpected error happened during deobfuscation.")
 
 def handler(request):
     return {"status": "ok", "message": "Discord bot running"}
