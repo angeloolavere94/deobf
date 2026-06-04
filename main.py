@@ -152,6 +152,69 @@ async def run_luaobfuscator_deobf(script_text: str):
         print(f"Execution error: {err}")
         return None
 
+async def run_prometheus_deobf(script_text: str):
+    try:
+        # Step 1: Detect Prometheus VM signature patterns
+        prometheus_signatures = [
+            r'local\s+\w+\s*=\s*\{[^}]*\}\s*local\s+\w+\s*=\s*\w+\[\w+\]',
+            r'string\.char\(.*?bit32\.',
+            r'local\s+\w+\s*=\s*#\w+\s*local\s+\w+\s*=\s*0',
+        ]
+        is_prometheus = any(re.search(p, script_text, re.DOTALL) for p in prometheus_signatures)
+        if not is_prometheus:
+            return None
+
+        # Step 2: Try to extract and decode string constants
+        result_lines = [HEADER_TEXT]
+
+        # Decode \ddd escape sequences
+        decoded = re.sub(
+            r'\\(\d{1,3})',
+            lambda m: chr(int(m.group(1))),
+            script_text
+        )
+
+        # Decode hex escape sequences
+        decoded = re.sub(
+            r'\\x([0-9a-fA-F]{2})',
+            lambda m: chr(int(m.group(1), 16)),
+            decoded
+        )
+
+        # Remove junk comments
+        decoded = re.sub(r'--\[\[.*?\]\]', '', decoded, flags=re.DOTALL)
+        decoded = re.sub(r'--[^\n]*', '', decoded)
+
+        # Collapse string concatenations like "ab" .. "cd" => "abcd"
+        def merge_strings(code):
+            prev = None
+            while prev != code:
+                prev = code
+                code = re.sub(
+                    r'"([^"]*)"\s*\.\.\s*"([^"]*)"',
+                    lambda m: f'"{m.group(1)}{m.group(2)}"',
+                    code
+                )
+            return code
+
+        decoded = merge_strings(decoded)
+
+        # Remove obvious junk variable assignments
+        decoded = re.sub(r'\blocal\s+\w+\s*=\s*nil\s*\n', '', decoded)
+        decoded = re.sub(r'\n\s*\n+', '\n\n', decoded)
+
+        result_lines.append(decoded.strip())
+        final = "\n".join(result_lines)
+
+        if len(final.strip()) < 10:
+            return None
+
+        return final
+
+    except Exception as e:
+        print(f"Prometheus deobf error: {e}")
+        return None
+
 client = DeobfBot()
 
 @client.event
@@ -255,6 +318,41 @@ async def lua_obfuscator_deobfuscate(interaction: discord.Interaction, file: dis
             
     except Exception as e:
         print(f"Error during LuaObfuscator deobfuscation: {e}")
+        await interaction.followup.send("😭 An unexpected error happened during deobfuscation.")
+
+@client.tree.command(name="prometheus-deobf", description="Deobfuscate an script that uses prometheus obfuscator.")
+@app_commands.describe(file="Attach a .lua or .txt file only!")
+async def prometheus_deobf(interaction: discord.Interaction, file: discord.Attachment):
+    if not (file.filename.endswith(".lua") or file.filename.endswith(".txt")):
+        await interaction.response.send_message("❌ Invalid file format! Please upload only `.lua` or `.txt` files.", ephemeral=True)
+        return
+
+    await interaction.response.defer()
+
+    try:
+        content = await file.read()
+        script_text = content.decode("utf-8", errors="ignore")
+
+        result = await run_prometheus_deobf(script_text)
+
+        if result is None:
+            await interaction.followup.send("💀 This script doesn't seem to be a Prometheus obfuscated script or it cannot be deobfuscated.")
+            return
+
+        # Build output filename: e.g. "script.lua" -> "script_deobfuscated.lua"
+        base, ext = os.path.splitext(file.filename)
+        if not ext:
+            ext = ".lua"
+        output_filename = f"{base}_deobfuscated{ext}"
+
+        output_file = io.BytesIO(result.encode("utf-8"))
+        await interaction.followup.send(
+            content="🗿 Success! Read the result below!",
+            file=discord.File(output_file, filename=output_filename)
+        )
+
+    except Exception as e:
+        print(f"Error during Prometheus deobfuscation: {e}")
         await interaction.followup.send("😭 An unexpected error happened during deobfuscation.")
 
 def handler(request):
