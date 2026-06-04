@@ -320,7 +320,7 @@ async def lua_obfuscator_deobfuscate(interaction: discord.Interaction, file: dis
         print(f"Error during LuaObfuscator deobfuscation: {e}")
         await interaction.followup.send("😭 An unexpected error happened during deobfuscation.")
 
-@client.tree.command(name="prometheus-deobf", description="Deobfuscate an script that uses prometheus obfuscator.")
+@client.tree.command(name="prometheus-deobfuscate", description="Deobfuscate an script that uses prometheus obfuscator.")
 @app_commands.describe(file="Attach a .lua or .txt file only!")
 async def prometheus_deobf(interaction: discord.Interaction, file: discord.Attachment):
     if not (file.filename.endswith(".lua") or file.filename.endswith(".txt")):
