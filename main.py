@@ -98,7 +98,12 @@ async def run_websim(content: bytes):
 async def run_luaobfuscator_deobf(script_text: str):
     IDENTIFIER = r"[\w_]+"
     
-    pattern = r"(.+)(local function " + IDENTIFIER + r"\(\.\.\. \).+local function )(" + IDENTIFIER + r")(\(\).+)(local function " + IDENTIFIER + r"\(" + IDENTIFIER + r", ?" + IDENTIFIER + r", ?" + IDENTIFIER + r"\).+)"
+    pattern = (
+        r"(.+)(local function " + IDENTIFIER + r"\(\.\.\.\).+local function )"
+        r"(" + IDENTIFIER + r")"
+        r"(\(\).+)"
+        r"(local function " + IDENTIFIER + r"\(" + IDENTIFIER + r", ?" + IDENTIFIER + r", ?" + IDENTIFIER + r"\).+)"
+    )
     
     match = re.search(pattern, script_text, re.DOTALL)
     
@@ -119,100 +124,32 @@ async def run_luaobfuscator_deobf(script_text: str):
         return
     end;"""
     
-    attack_payload = a + b + deserialize_func + d + injection + e
+    modified_chunk = a + b + deserialize_func + d + injection + e
     
     try:
-        with tempfile.NamedTemporaryFile(mode='w+', suffix='.lua', delete=False, encoding='utf-8') as temp_lua_file:
-            temp_lua_file.write(attack_payload)
-            temp_lua_file.flush()
-            temp_file_path = temp_lua_file.name
+        with tempfile.NamedTemporaryFile(mode='w+', suffix='.lua', delete=False, encoding='utf-8') as tmp:
+            tmp.write(modified_chunk)
+            tmp_path = tmp.name
 
         result = subprocess.run(
-            ["lua", temp_file_path],
+            ["lua", tmp_path],
             capture_output=True,
             text=True,
             timeout=5
         )
         
         try:
-            os.remove(temp_file_path)
+            os.remove(tmp_path)
         except Exception:
             pass
             
-        if result.returncode != 0:
+        if result.returncode != 0 or not result.stdout.strip():
             return None
             
-        dumped_constants = result.stdout
-        if not dumped_constants.strip():
-            return None
-            
-        return HEADER_TEXT + dumped_constants
+        return HEADER_TEXT + result.stdout
 
     except (subprocess.TimeoutExpired, Exception) as err:
         print(f"Execution error: {err}")
-        return None
-
-async def run_prometheus_deobf(script_text: str):
-    try:
-        # Step 1: Detect Prometheus VM signature patterns
-        prometheus_signatures = [
-            r'local\s+\w+\s*=\s*\{[^}]*\}\s*local\s+\w+\s*=\s*\w+\[\w+\]',
-            r'string\.char\(.*?bit32\.',
-            r'local\s+\w+\s*=\s*#\w+\s*local\s+\w+\s*=\s*0',
-        ]
-        is_prometheus = any(re.search(p, script_text, re.DOTALL) for p in prometheus_signatures)
-        if not is_prometheus:
-            return None
-
-        # Step 2: Try to extract and decode string constants
-        result_lines = [HEADER_TEXT]
-
-        # Decode \ddd escape sequences
-        decoded = re.sub(
-            r'\\(\d{1,3})',
-            lambda m: chr(int(m.group(1))),
-            script_text
-        )
-
-        # Decode hex escape sequences
-        decoded = re.sub(
-            r'\\x([0-9a-fA-F]{2})',
-            lambda m: chr(int(m.group(1), 16)),
-            decoded
-        )
-
-        # Remove junk comments
-        decoded = re.sub(r'--\[\[.*?\]\]', '', decoded, flags=re.DOTALL)
-        decoded = re.sub(r'--[^\n]*', '', decoded)
-
-        # Collapse string concatenations like "ab" .. "cd" => "abcd"
-        def merge_strings(code):
-            prev = None
-            while prev != code:
-                prev = code
-                code = re.sub(
-                    r'"([^"]*)"\s*\.\.\s*"([^"]*)"',
-                    lambda m: f'"{m.group(1)}{m.group(2)}"',
-                    code
-                )
-            return code
-
-        decoded = merge_strings(decoded)
-
-        # Remove obvious junk variable assignments
-        decoded = re.sub(r'\blocal\s+\w+\s*=\s*nil\s*\n', '', decoded)
-        decoded = re.sub(r'\n\s*\n+', '\n\n', decoded)
-
-        result_lines.append(decoded.strip())
-        final = "\n".join(result_lines)
-
-        if len(final.strip()) < 10:
-            return None
-
-        return final
-
-    except Exception as e:
-        print(f"Prometheus deobf error: {e}")
         return None
 
 client = DeobfBot()
@@ -293,8 +230,8 @@ async def websim_deobf(interaction: discord.Interaction, file: discord.Attachmen
     except Exception:
         await interaction.response.send_message("😭 WebSim deobfuscation failed.")
 
-@client.tree.command(name="lua-obfuscator-deobfuscate", description="Deobfuscate an script that uses LuaObfuscator (FERIB).")
-@app_commands.describe(file="Attach a .lua and .txt file only.")
+@client.tree.command(name="lua-obfuscator-deobfuscate", description="Deobfuscate a script that uses LuaObfuscator (FERIB).")
+@app_commands.describe(file="Attach a .lua or .txt file only.")
 async def lua_obfuscator_deobfuscate(interaction: discord.Interaction, file: discord.Attachment):
     if not (file.filename.endswith(".lua") or file.filename.endswith(".txt")):
         await interaction.response.send_message("❌ Invalid file format! Please upload only `.lua` or `.txt` files.", ephemeral=True)
@@ -309,37 +246,9 @@ async def lua_obfuscator_deobfuscate(interaction: discord.Interaction, file: dis
         result = await run_luaobfuscator_deobf(script_text)
         
         if result is None:
-            await interaction.followup.send("💀 This script doesn't seem to be a LuaObfuscator (FERIB) script or it cannot be deobfuscated.")
+            await interaction.followup.send("💀 This script doesn't seem to be a LuaObfuscator (FERIB) script or deobfuscation failed.")
             return
 
-        output_file = io.BytesIO(result.encode("utf-8"))
-        await interaction.followup.send(content="🎉 Deobfuscation complete! Here is your deobfuscated script:")
-        await interaction.followup.send(file=discord.File(output_file, filename="deobfuscated.lua"))
-            
-    except Exception as e:
-        print(f"Error during LuaObfuscator deobfuscation: {e}")
-        await interaction.followup.send("😭 An unexpected error happened during deobfuscation.")
-
-@client.tree.command(name="prometheus-deobfuscate", description="Deobfuscate an script that uses prometheus obfuscator.")
-@app_commands.describe(file="Attach a .lua or .txt file only!")
-async def prometheus_deobf(interaction: discord.Interaction, file: discord.Attachment):
-    if not (file.filename.endswith(".lua") or file.filename.endswith(".txt")):
-        await interaction.response.send_message("❌ Invalid file format! Please upload only `.lua` or `.txt` files.", ephemeral=True)
-        return
-
-    await interaction.response.defer()
-
-    try:
-        content = await file.read()
-        script_text = content.decode("utf-8", errors="ignore")
-
-        result = await run_prometheus_deobf(script_text)
-
-        if result is None:
-            await interaction.followup.send("💀 This script doesn't seem to be a Prometheus obfuscated script or it cannot be deobfuscated.")
-            return
-
-        # Build output filename: e.g. "script.lua" -> "script_deobfuscated.lua"
         base, ext = os.path.splitext(file.filename)
         if not ext:
             ext = ".lua"
@@ -347,12 +256,12 @@ async def prometheus_deobf(interaction: discord.Interaction, file: discord.Attac
 
         output_file = io.BytesIO(result.encode("utf-8"))
         await interaction.followup.send(
-            content="🗿 Success! Read the result below!",
+            content="🎉 Deobfuscation complete! Here is your deobfuscated script:",
             file=discord.File(output_file, filename=output_filename)
         )
-
+            
     except Exception as e:
-        print(f"Error during Prometheus deobfuscation: {e}")
+        print(f"Error during LuaObfuscator deobfuscation: {e}")
         await interaction.followup.send("😭 An unexpected error happened during deobfuscation.")
 
 def handler(request):
